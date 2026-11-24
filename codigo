@@ -1,0 +1,226 @@
+// ============================================================
+// JOGO: COBRA NO MATO (versao do Campo Minado)
+// Ideia: o campo e um mato cheio de cobras escondidas.
+// Voce abre as "moitas" (#). Se abrir uma com cobra, perde!
+// O numero que aparece diz quantas cobras tem ao redor (8 vizinhas).
+// ============================================================
+
+// PASSO 1: bibliotecas que vamos usar
+#include <stdio.h>   // printf e scanf (entrada e saida)
+#include <stdlib.h>  // rand e srand (numeros aleatorios)
+#include <time.h>    // time (para o sorteio mudar a cada jogo)
+
+// PASSO 2: constantes (valores fixos que o programa usa)
+#define TAM 8          // o mato e uma matriz 8x8
+#define NUM_COBRAS 10  // quantidade de cobras escondidas
+
+// PASSO 3: matrizes globais (guardam o estado do jogo)
+// Cada matriz tem TAM linhas e TAM colunas.
+int cobra[TAM][TAM];     // 1 = tem cobra na moita | 0 = nao tem
+int aberto[TAM][TAM];    // 1 = moita ja foi aberta | 0 = ainda fechada
+int marcado[TAM][TAM];   // 1 = jogador colocou bandeira (suspeita) | 0 = nao
+int vizinhas[TAM][TAM];  // quantidade de cobras ao redor de cada moita
+
+// PASSO 4: funcao que deixa tudo zerado no comeco
+void inicializar() {
+    // Dois "for" aninhados percorrem TODAS as posicoes da matriz:
+    // o de fora anda pelas linhas, o de dentro anda pelas colunas.
+    for (int i = 0; i < TAM; i++) {
+        for (int j = 0; j < TAM; j++) {
+            cobra[i][j] = 0;
+            aberto[i][j] = 0;
+            marcado[i][j] = 0;
+            vizinhas[i][j] = 0;
+        }
+    }
+}
+
+// PASSO 5: funcao que esconde as cobras em lugares aleatorios
+void sortearCobras() {
+    int colocadas = 0;  // conta quantas cobras ja foram escondidas
+
+    // Repete ate esconder todas as cobras
+    while (colocadas < NUM_COBRAS) {
+        int l = rand() % TAM;  // linha sorteada (0 a 7)
+        int c = rand() % TAM;  // coluna sorteada (0 a 7)
+
+        // So coloca se ainda NAO tiver cobra ali
+        // (senao poderiamos sortear o mesmo lugar duas vezes)
+        if (cobra[l][c] == 0) {
+            cobra[l][c] = 1;
+            colocadas++;
+        }
+    }
+}
+
+// PASSO 6: funcao que conta quantas cobras existem ao redor de uma moita
+int contarVizinhas(int l, int c) {
+    int total = 0;
+
+    // di e dj vao de -1 ate +1: isso visita as 8 casas ao redor
+    // (cima, baixo, lados e diagonais), e tambem a propria casa.
+    for (int di = -1; di <= 1; di++) {
+        for (int dj = -1; dj <= 1; dj++) {
+            int nl = l + di;  // nova linha (vizinha)
+            int nc = c + dj;  // nova coluna (vizinha)
+
+            // Confere se a vizinha esta DENTRO do mato (nao sai da matriz)
+            if (nl >= 0 && nl < TAM && nc >= 0 && nc < TAM) {
+                total += cobra[nl][nc];  // soma 1 se tiver cobra
+            }
+        }
+    }
+    return total;
+}
+
+// PASSO 7: calcula o numero de todas as moitas de uma vez
+void calcularNumeros() {
+    for (int i = 0; i < TAM; i++) {
+        for (int j = 0; j < TAM; j++) {
+            vizinhas[i][j] = contarVizinhas(i, j);
+        }
+    }
+}
+
+// PASSO 8: abre uma moita (e abre as vizinhas sozinha se for segura)
+// Essa funcao e RECURSIVA: ela chama a si mesma.
+void abrirMoita(int l, int c) {
+    // Se saiu do mato, para aqui
+    if (l < 0 || l >= TAM || c < 0 || c >= TAM) return;
+
+    // Se ja foi aberta ou tem bandeira, nao faz nada
+    if (aberto[l][c] == 1 || marcado[l][c] == 1) return;
+
+    // Abre a moita
+    aberto[l][c] = 1;
+
+    // Se for uma moita com 0 cobras ao redor, e totalmente segura.
+    // Entao abrimos tambem as 8 vizinhas (efeito "cascata").
+    if (vizinhas[l][c] == 0 && cobra[l][c] == 0) {
+        for (int di = -1; di <= 1; di++) {
+            for (int dj = -1; dj <= 1; dj++) {
+                abrirMoita(l + di, c + dj);  // chama a propria funcao
+            }
+        }
+    }
+}
+
+// PASSO 9: desenha o mato na tela
+// Se "mostrarTudo" for 1, revela todas as cobras (usado quando o jogo acaba)
+void mostrarMato(int mostrarTudo) {
+    printf("\n     ");
+    for (int j = 0; j < TAM; j++) printf("%d ", j + 1);  // numeros das colunas
+    printf("\n     ");
+    for (int j = 0; j < TAM; j++) printf("- ");          // linha decorativa
+    printf("\n");
+
+    for (int i = 0; i < TAM; i++) {
+        printf(" %d | ", i + 1);  // numero da linha
+
+        for (int j = 0; j < TAM; j++) {
+            if (mostrarTudo && cobra[i][j] == 1) {
+                printf("@ ");                      // @ = cobra revelada
+            } else if (marcado[i][j] == 1) {
+                printf("P ");                      // P = moita marcada (perigo)
+            } else if (aberto[i][j] == 0) {
+                printf("# ");                      // # = moita fechada (mato)
+            } else if (vizinhas[i][j] == 0) {
+                printf(". ");                      // . = chao limpo, sem cobra por perto
+            } else {
+                printf("%d ", vizinhas[i][j]);     // numero de cobras ao redor
+            }
+        }
+        printf("\n");
+    }
+    printf("\n");
+}
+
+// PASSO 10: confere se o jogador venceu
+// Vitoria = todas as moitas SEM cobra foram abertas
+int venceu() {
+    for (int i = 0; i < TAM; i++) {
+        for (int j = 0; j < TAM; j++) {
+            // Se existe uma moita segura ainda fechada, ainda nao venceu
+            if (cobra[i][j] == 0 && aberto[i][j] == 0) {
+                return 0;
+            }
+        }
+    }
+    return 1;  // todas as seguras estao abertas
+}
+
+// PASSO 11: funcao principal (onde o programa comeca)
+int main() {
+    char acao;       // 'a' = abrir | 'm' = marcar
+    int linha, col;  // posicao digitada pelo jogador
+    int jogando = 1; // 1 = jogo rolando | 0 = acabou
+
+    // Muda a "semente" do sorteio usando a hora atual.
+    // Sem isso, as cobras seriam sempre nos mesmos lugares.
+    srand(time(NULL));
+
+    // Prepara o jogo
+    inicializar();
+    sortearCobras();
+    calcularNumeros();
+
+    printf("=== COBRA NO MATO ===\n");
+    printf("Ha %d cobras escondidas no mato!\n", NUM_COBRAS);
+    printf("Comandos: 'a' linha coluna = abrir moita\n");
+    printf("          'm' linha coluna = marcar/desmarcar moita suspeita\n");
+    printf("Exemplo: a 3 4\n");
+
+    // PASSO 12: laco principal - repete ate o jogo acabar
+    while (jogando) {
+        mostrarMato(0);  // mostra o mato (sem revelar cobras)
+
+        printf("Sua jogada: ");
+        scanf(" %c %d %d", &acao, &linha, &col);
+
+        // O jogador digita de 1 a 8, mas a matriz comeca em 0.
+        // Por isso subtraimos 1.
+        linha--;
+        col--;
+
+        // Valida a jogada: se a posicao for invalida, pede de novo
+        if (linha < 0 || linha >= TAM || col < 0 || col >= TAM) {
+            printf("Posicao invalida! Use numeros de 1 a %d.\n", TAM);
+            continue;  // volta para o comeco do while
+        }
+
+        if (acao == 'm') {
+            // Marca ou desmarca (so em moita ainda fechada)
+            if (aberto[linha][col] == 0) {
+                marcado[linha][col] = !marcado[linha][col];  // inverte 0<->1
+            }
+        } else if (acao == 'a') {
+            // Se a moita tem bandeira, nao deixa abrir
+            if (marcado[linha][col] == 1) {
+                printf("Essa moita esta marcada! Desmarque antes.\n");
+                continue;
+            }
+
+            // Pisou numa cobra: fim de jogo
+            if (cobra[linha][col] == 1) {
+                aberto[linha][col] = 1;
+                printf("\nSSSSS! Voce pisou numa COBRA! Fim de jogo!\n");
+                mostrarMato(1);  // revela onde estavam todas as cobras
+                jogando = 0;
+            } else {
+                // Moita segura: abre (e talvez abre varias de uma vez)
+                abrirMoita(linha, col);
+
+                // Depois de abrir, confere se ganhou
+                if (venceu()) {
+                    printf("\nPARABENS! Voce atravessou o mato sem tomar picada!\n");
+                    mostrarMato(1);
+                    jogando = 0;
+                }
+            }
+        } else {
+            printf("Comando invalido! Use 'a' ou 'm'.\n");
+        }
+    }
+
+    return 0;  // programa terminou sem erros
+}
