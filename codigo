@@ -1,133 +1,174 @@
 // ============================================================
-// JOGO: COBRA NO MATO (versao do Campo Minado)
-// Ideia: o campo e um mato cheio de cobras escondidas.
-// Voce abre as "moitas" (#). Se abrir uma com cobra, perde!
-// O numero que aparece diz quantas cobras tem ao redor (8 vizinhas).
+//  COBRA NO MATO  (versao "Campo Minado" em C) 
+// ============================================================
+//  COMO JOGAR (formato: acao linha coluna):
+//    a 3 4  -> abrir a moita da linha 3, coluna 4
+//    m 2 5  -> marcar/desmarcar moita suspeita (P)
 // ============================================================
 
-// PASSO 1: bibliotecas que vamos usar
-#include <stdio.h>   // printf e scanf (entrada e saida)
-#include <stdlib.h>  // rand e srand (numeros aleatorios)
-#include <time.h>    // time (para o sorteio mudar a cada jogo)
+#include <stdio.h>   // printf, scanf, arquivos (fopen, fgets, fprintf, fscanf)
+#include <stdlib.h>  // rand, srand, exit
+#include <time.h>    // time (semente do sorteio)
+#include <ctype.h>   // tolower (aceita 'A' e 'a')
 
-// PASSO 2: constantes (valores fixos que o programa usa)
-#define TAM 8          // o mato e uma matriz 8x8
-#define NUM_COBRAS 10  // quantidade de cobras escondidas
+// ----------constantes ----------
+#define TAM 8                      // mato de 8x8
+#define NUM_COBRAS 10              // cobras escondidas
+#define ARQ_HISTORIA "historia.txt" // arquivo que SERA LIDO
+#define ARQ_RANKING  "ranking.txt"  // arquivo que SERA ESCRITO e LIDO
+#define MAX_RANKING 100            // maximo de registros lidos do ranking
+#define TOP 5                      // quantos aparecem no ranking
 
-// PASSO 3: matrizes globais (guardam o estado do jogo)
-// Cada matriz tem TAM linhas e TAM colunas.
-int cobra[TAM][TAM];     // 1 = tem cobra na moita | 0 = nao tem
-int aberto[TAM][TAM];    // 1 = moita ja foi aberta | 0 = ainda fechada
-int marcado[TAM][TAM];   // 1 = jogador colocou bandeira (suspeita) | 0 = nao
-int vizinhas[TAM][TAM];  // quantidade de cobras ao redor de cada moita
+// Estados possiveis de uma jogada (deixa o codigo mais legivel)
+#define CONTINUA 0
+#define PERDEU   1
+#define VENCEU   2
 
-// PASSO 4: funcao que deixa tudo zerado no comeco
-void inicializar() {
-    // Dois "for" aninhados percorrem TODAS as posicoes da matriz:
-    // o de fora anda pelas linhas, o de dentro anda pelas colunas.
+// ----------STRUCTS----------
+
+// Guarda uma posicao do mato (linha e coluna).
+// Ela sera usada DENTRO da struct Jogador (struct aninhada).
+typedef struct {
+    int linha;
+    int coluna;
+} Coordenada;
+
+// Cada "moita" do mato tem 4 informacoes juntas numa caixinha so.
+typedef struct {
+    int temCobra;   // 1 = tem cobra | 0 = nao tem
+    int aberta;     // 1 = ja foi aberta
+    int marcada;    // 1 = jogador marcou como suspeita
+    int vizinhas;   // quantas cobras existem ao redor
+} Moita;
+
+// Dados do jogador.
+// "ultimaJogada" e uma struct DENTRO de outra struct, NÃO ESQUECER.
+// Para acessar: jogador.ultimaJogada.linha
+typedef struct {
+    char nome[30];
+    int pontos;
+    int jogadas;
+    Coordenada ultimaJogada;   // <-- struct aninhada
+} Jogador;
+
+// Uma linha do ranking (lida do arquivo ranking.txt)
+typedef struct {
+    char nome[30];
+    int pontos;
+    char resultado[10];   // "VENCEU" ou "PERDEU"
+} Registro;
+
+// uma matriz pra Moita.
+Moita mato[TAM][TAM];
+
+// ============================================================
+//  FUNCOES AUXILIARES
+// ============================================================
+
+// Limpa o que sobrou no teclado (evita loop infinito se digitar errado)
+void limparBuffer() {
+    int c;
+    while ((c = getchar()) != '\n' && c != EOF);
+}
+
+// --------Preparando o matagal----------
+void inicializarMato() {
+    Moita vazia = {0, 0, 0, 0};   // moita com tudo zerado
     for (int i = 0; i < TAM; i++) {
         for (int j = 0; j < TAM; j++) {
-            cobra[i][j] = 0;
-            aberto[i][j] = 0;
-            marcado[i][j] = 0;
-            vizinhas[i][j] = 0;
+            mato[i][j] = vazia;   // copia a moita vazia para cada posicao
         }
     }
 }
 
-// PASSO 5: funcao que esconde as cobras em lugares aleatorios
+// ----------Escondendo as cobras----------
 void sortearCobras() {
-    int colocadas = 0;  // conta quantas cobras ja foram escondidas
-
-    // Repete ate esconder todas as cobras
+    int colocadas = 0;
     while (colocadas < NUM_COBRAS) {
-        int l = rand() % TAM;  // linha sorteada (0 a 7)
-        int c = rand() % TAM;  // coluna sorteada (0 a 7)
-
-        // So coloca se ainda NAO tiver cobra ali
-        // (senao poderiamos sortear o mesmo lugar duas vezes)
-        if (cobra[l][c] == 0) {
-            cobra[l][c] = 1;
+        int l = rand() % TAM;   // linha sorteada
+        int c = rand() % TAM;   // coluna sorteada
+        // so coloca se ainda nao tiver cobra (evita repetir o lugar)
+        if (mato[l][c].temCobra == 0) {
+            mato[l][c].temCobra = 1;
             colocadas++;
         }
     }
 }
 
-// PASSO 6: funcao que conta quantas cobras existem ao redor de uma moita
+// ----------Contando cobras ao redor de uma moita ----------
 int contarVizinhas(int l, int c) {
     int total = 0;
-
-    // di e dj vao de -1 ate +1: isso visita as 8 casas ao redor
-    // (cima, baixo, lados e diagonais), e tambem a propria casa.
+    // di e dj de -1 a +1 visitam as 8 casas ao redor
     for (int di = -1; di <= 1; di++) {
         for (int dj = -1; dj <= 1; dj++) {
-            int nl = l + di;  // nova linha (vizinha)
-            int nc = c + dj;  // nova coluna (vizinha)
-
-            // Confere se a vizinha esta DENTRO do mato (nao sai da matriz)
+            int nl = l + di;
+            int nc = c + dj;
+            // Enfase no so conta se a vizinha esta DENTRO do mato
             if (nl >= 0 && nl < TAM && nc >= 0 && nc < TAM) {
-                total += cobra[nl][nc];  // soma 1 se tiver cobra
+                total += mato[nl][nc].temCobra;
             }
         }
     }
     return total;
 }
 
-// PASSO 7: calcula o numero de todas as moitas de uma vez
+// ----------Calculando o numero de todas as moitas----------
 void calcularNumeros() {
     for (int i = 0; i < TAM; i++) {
         for (int j = 0; j < TAM; j++) {
-            vizinhas[i][j] = contarVizinhas(i, j);
+            mato[i][j].vizinhas = contarVizinhas(i, j);
         }
     }
 }
 
-// PASSO 8: abre uma moita (e abre as vizinhas sozinha se for segura)
-// Essa funcao e RECURSIVA: ela chama a si mesma.
+// Prepara tudo para uma nova partida (junta os 3 passos acima)
+void prepararPartida() {
+    inicializarMato();
+    sortearCobras();
+    calcularNumeros();
+}
+
+// ---------- Abrir moita (RECURSIVA) ----------
 void abrirMoita(int l, int c) {
-    // Se saiu do mato, para aqui
+    // saiu do mato? para.
     if (l < 0 || l >= TAM || c < 0 || c >= TAM) return;
+    // ja aberta ou marcada? para.
+    if (mato[l][c].aberta || mato[l][c].marcada) return;
 
-    // Se ja foi aberta ou tem bandeira, nao faz nada
-    if (aberto[l][c] == 1 || marcado[l][c] == 1) return;
+    mato[l][c].aberta = 1;
 
-    // Abre a moita
-    aberto[l][c] = 1;
-
-    // Se for uma moita com 0 cobras ao redor, e totalmente segura.
-    // Entao abrimos tambem as 8 vizinhas (efeito "cascata").
-    if (vizinhas[l][c] == 0 && cobra[l][c] == 0) {
+    // se nao tem cobra por perto, abre as 8 vizinhas (efeito cascata)
+    if (mato[l][c].vizinhas == 0) {
         for (int di = -1; di <= 1; di++) {
             for (int dj = -1; dj <= 1; dj++) {
-                abrirMoita(l + di, c + dj);  // chama a propria funcao
+                abrirMoita(l + di, c + dj);
             }
         }
     }
 }
 
-// PASSO 9: desenha o mato na tela
-// Se "mostrarTudo" for 1, revela todas as cobras (usado quando o jogo acaba)
+// ----------Desenho do matagal----------
+// mostrarTudo = 1 revela as cobras (usado no fim do jogo)
 void mostrarMato(int mostrarTudo) {
     printf("\n     ");
-    for (int j = 0; j < TAM; j++) printf("%d ", j + 1);  // numeros das colunas
+    for (int j = 0; j < TAM; j++) printf("%d ", j + 1);
     printf("\n     ");
-    for (int j = 0; j < TAM; j++) printf("- ");          // linha decorativa
+    for (int j = 0; j < TAM; j++) printf("- ");
     printf("\n");
 
     for (int i = 0; i < TAM; i++) {
-        printf(" %d | ", i + 1);  // numero da linha
-
+        printf(" %d | ", i + 1);
         for (int j = 0; j < TAM; j++) {
-            if (mostrarTudo && cobra[i][j] == 1) {
-                printf("@ ");                      // @ = cobra revelada
-            } else if (marcado[i][j] == 1) {
-                printf("P ");                      // P = moita marcada (perigo)
-            } else if (aberto[i][j] == 0) {
-                printf("# ");                      // # = moita fechada (mato)
-            } else if (vizinhas[i][j] == 0) {
-                printf(". ");                      // . = chao limpo, sem cobra por perto
+            if (mostrarTudo && mato[i][j].temCobra) {
+                printf("@ ");                          // cobra revelada
+            } else if (mato[i][j].marcada) {
+                printf("P ");                          // marcada
+            } else if (!mato[i][j].aberta) {
+                printf("# ");                          // fechada
+            } else if (mato[i][j].vizinhas == 0) {
+                printf(". ");                          // limpa
             } else {
-                printf("%d ", vizinhas[i][j]);     // numero de cobras ao redor
+                printf("%d ", mato[i][j].vizinhas);    // numero
             }
         }
         printf("\n");
@@ -135,92 +176,244 @@ void mostrarMato(int mostrarTudo) {
     printf("\n");
 }
 
-// PASSO 10: confere se o jogador venceu
-// Vitoria = todas as moitas SEM cobra foram abertas
-int venceu() {
+// ----------Pontuação----------
+
+// Conta quantas moitas SEGURAS ja foram abertas
+int contarAbertas() {
+    int total = 0;
     for (int i = 0; i < TAM; i++) {
         for (int j = 0; j < TAM; j++) {
-            // Se existe uma moita segura ainda fechada, ainda nao venceu
-            if (cobra[i][j] == 0 && aberto[i][j] == 0) {
-                return 0;
-            }
+            if (mato[i][j].aberta && !mato[i][j].temCobra) total++;
         }
     }
-    return 1;  // todas as seguras estao abertas
+    return total;
 }
 
-// PASSO 11: funcao principal (onde o programa comeca)
-int main() {
-    char acao;       // 'a' = abrir | 'm' = marcar
-    int linha, col;  // posicao digitada pelo jogador
-    int jogando = 1; // 1 = jogo rolando | 0 = acabou
+// Venceu = abriu todas as moitas sem cobra
+int venceu() {
+    return contarAbertas() == (TAM * TAM - NUM_COBRAS);
+}
 
-    // Muda a "semente" do sorteio usando a hora atual.
-    // Sem isso, as cobras seriam sempre nos mesmos lugares.
-    srand(time(NULL));
+// Pontos = 10 por moita segura aberta (+100 de bonus se vencer)
+// Recebe o jogador por PONTEIRO (*) para poder alterar os pontos dele.
+void calcularPontos(Jogador *j, int resultado) {
+    j->pontos = contarAbertas() * 10;
+    if (resultado == VENCEU) {
+        j->pontos += 100;
+    }
+}
 
-    // Prepara o jogo
-    inicializar();
-    sortearCobras();
-    calcularNumeros();
+// ============================================================
+//  JOGADA
+// ============================================================
 
-    printf("=== COBRA NO MATO ===\n");
-    printf("Ha %d cobras escondidas no mato!\n", NUM_COBRAS);
-    printf("Comandos: 'a' linha coluna = abrir moita\n");
-    printf("          'm' linha coluna = marcar/desmarcar moita suspeita\n");
-    printf("Exemplo: a 3 4\n");
+// ----------Ler Jogadas----------
+// Devolve 1 se a jogada e valida, 0 se nao for.
+// Preenche a acao e a Coordenada por ponteiro.
+int lerJogada(char *acao, Coordenada *pos) {
+    int lidos = scanf(" %c %d %d", acao, &pos->linha, &pos->coluna);
 
-    // PASSO 12: laco principal - repete ate o jogo acabar
-    while (jogando) {
-        mostrarMato(0);  // mostra o mato (sem revelar cobras)
+    if (lidos == EOF) exit(0);   // acabou a entrada: encerra o programa
+    if (lidos != 3) {            // digitou algo errado
+        limparBuffer();
+        return 0;
+    }
 
-        printf("Sua jogada: ");
-        scanf(" %c %d %d", &acao, &linha, &col);
+    *acao = tolower(*acao);      // 'A' vira 'a'
+    pos->linha--;                // jogador digita 1..8, matriz usa 0..7
+    pos->coluna--;
 
-        // O jogador digita de 1 a 8, mas a matriz comeca em 0.
-        // Por isso subtraimos 1.
-        linha--;
-        col--;
+    // posicao fora do mato?
+    if (pos->linha < 0 || pos->linha >= TAM ||
+        pos->coluna < 0 || pos->coluna >= TAM) {
+        return 0;
+    }
+    return 1;
+}
 
-        // Valida a jogada: se a posicao for invalida, pede de novo
-        if (linha < 0 || linha >= TAM || col < 0 || col >= TAM) {
-            printf("Posicao invalida! Use numeros de 1 a %d.\n", TAM);
-            continue;  // volta para o comeco do while
+// ----------Executar a jogada ----------
+// Devolve CONTINUA, PERDEU ou VENCEU
+int executarJogada(char acao, Coordenada pos, Jogador *j) {
+    Moita *m = &mato[pos.linha][pos.coluna];   // atalho para a moita escolhida
+
+    j->ultimaJogada = pos;   // guarda na struct aninhada (copia linha e coluna)
+
+    if (acao == 'm') {
+        // marcar/desmarcar so vale para moita fechada
+        if (!m->aberta) m->marcada = !m->marcada;
+        return CONTINUA;
+    }
+
+    if (acao == 'a') {
+        if (m->marcada) {
+            printf("Essa moita esta marcada! Desmarque antes.\n");
+            return CONTINUA;
         }
+        j->jogadas++;   // conta mais uma jogada
 
-        if (acao == 'm') {
-            // Marca ou desmarca (so em moita ainda fechada)
-            if (aberto[linha][col] == 0) {
-                marcado[linha][col] = !marcado[linha][col];  // inverte 0<->1
-            }
-        } else if (acao == 'a') {
-            // Se a moita tem bandeira, nao deixa abrir
-            if (marcado[linha][col] == 1) {
-                printf("Essa moita esta marcada! Desmarque antes.\n");
-                continue;
-            }
+        if (m->temCobra) {
+            m->aberta = 1;
+            return PERDEU;
+        }
+        abrirMoita(pos.linha, pos.coluna);
+        if (venceu()) return VENCEU;
+        return CONTINUA;
+    }
 
-            // Pisou numa cobra: fim de jogo
-            if (cobra[linha][col] == 1) {
-                aberto[linha][col] = 1;
-                printf("\nSSSSS! Voce pisou numa COBRA! Fim de jogo!\n");
-                mostrarMato(1);  // revela onde estavam todas as cobras
-                jogando = 0;
-            } else {
-                // Moita segura: abre (e talvez abre varias de uma vez)
-                abrirMoita(linha, col);
+    printf("Comando invalido! Use 'a' ou 'm'.\n");
+    return CONTINUA;
+}
 
-                // Depois de abrir, confere se ganhou
-                if (venceu()) {
-                    printf("\nPARABENS! Voce atravessou o mato sem tomar picada!\n");
-                    mostrarMato(1);
-                    jogando = 0;
-                }
+// ============================================================
+//  ARQUIVOS
+// ============================================================
+
+// ----------LER a historia do arquivo (fgets)----------
+void exibirHistoria() {
+    FILE *arq = fopen(ARQ_HISTORIA, "r");   // "r" = somente leitura
+    char linha[200];
+
+    printf("\n");
+    if (arq == NULL) {
+        // se o arquivo nao existir, mostra um texto padrao
+        printf("Atravesse o mato sem ser picado pelas cobras!\n");
+        return;
+    }
+    // fgets le uma linha por vez, ate o fim do arquivo (devolve NULL)
+    while (fgets(linha, sizeof(linha), arq) != NULL) {
+        printf("%s", linha);
+    }
+    fclose(arq);   // sempre fechar o arquivo
+}
+
+// ---------- SALVAR no ranking (fprintf) ----------
+void salvarRanking(Jogador j, int resultado) {
+    FILE *arq = fopen(ARQ_RANKING, "a");   // "a" = acrescenta no final
+    if (arq == NULL) {
+        printf("Nao foi possivel salvar o ranking.\n");
+        return;
+    }
+    // escreve uma linha no formato: nome pontos resultado
+    fprintf(arq, "%s %d %s\n", j.nome, j.pontos,
+            resultado == VENCEU ? "VENCEU" : "PERDEU");
+    fclose(arq);
+}
+
+// ----------LER e mostrar o ranking (fscanf + ordenacao)----------
+void mostrarRanking() {
+    Registro lista[MAX_RANKING];   // VETOR de structs
+    int total = 0;
+
+    FILE *arq = fopen(ARQ_RANKING, "r");
+    if (arq == NULL) {
+        printf("\nAinda nao ha ranking. Jogue uma partida!\n");
+        return;
+    }
+
+    // fscanf devolve quantos valores leu; 3 = linha completa e valida
+    while (total < MAX_RANKING &&
+           fscanf(arq, "%29s %d %9s", lista[total].nome,
+                  &lista[total].pontos, lista[total].resultado) == 3) {
+        total++;
+    }
+    fclose(arq);
+
+    // Ordenacao Bubble Sort: maior pontuacao primeiro
+    for (int i = 0; i < total - 1; i++) {
+        for (int k = 0; k < total - 1 - i; k++) {
+            if (lista[k].pontos < lista[k + 1].pontos) {
+                Registro temp = lista[k];       // troca de posicao
+                lista[k] = lista[k + 1];
+                lista[k + 1] = temp;
             }
-        } else {
-            printf("Comando invalido! Use 'a' ou 'm'.\n");
         }
     }
 
-    return 0;  // programa terminou sem erros
+    printf("\n===== RANKING (TOP %d) =====\n", TOP);
+    for (int i = 0; i < total && i < TOP; i++) {
+        printf("%d. %-15s %4d pts  (%s)\n", i + 1, lista[i].nome,
+               lista[i].pontos, lista[i].resultado);
+    }
+}
+
+// ============================================================
+//  PARTIDA E MENU
+// ============================================================
+
+// ----------Partida completa ----------
+void jogarPartida() {
+    Jogador jogador;
+    char acao;
+    Coordenada pos;
+    int estado = CONTINUA;
+
+    // Dados iniciais do jogador
+    printf("\nDigite seu nome (sem espacos): ");
+    scanf(" %29s", jogador.nome);
+    jogador.pontos = 0;
+    jogador.jogadas = 0;
+    jogador.ultimaJogada.linha = -1;    // acessando a struct aninhada
+    jogador.ultimaJogada.coluna = -1;
+
+    exibirHistoria();     // le historia.txt
+    prepararPartida();    // cria o mato
+    printf("\nHa %d cobras escondidas! Comandos: a (abrir) | m (marcar)\n", NUM_COBRAS);
+
+    // laco da partida: repete ate perder ou vencer
+    while (estado == CONTINUA) {
+        mostrarMato(0);
+        printf("Sua jogada (ex: a 3 4): ");
+
+        if (!lerJogada(&acao, &pos)) {
+            printf("Jogada invalida! Use: acao linha coluna (1 a %d)\n", TAM);
+            continue;
+        }
+        estado = executarJogada(acao, pos, &jogador);
+    }
+
+    // fim da partida
+    mostrarMato(1);
+    if (estado == VENCEU) {
+        printf("PARABENS! Voce atravessou o mato sem tomar picada!\n");
+    } else {
+        printf("SSSSS! Voce pisou numa COBRA! Fim de jogo!\n");
+    }
+
+    calcularPontos(&jogador, estado);
+    printf("%s, voce fez %d pontos em %d jogadas.\n",
+           jogador.nome, jogador.pontos, jogador.jogadas);
+
+    salvarRanking(jogador, estado);   // grava no arquivo
+    mostrarRanking();                 // mostra o ranking atualizado
+}
+
+void exibirMenu() {
+    printf("\n===== COBRA NO MATO =====\n");
+    printf("1 - Jogar\n");
+    printf("2 - Ver ranking\n");
+    printf("3 - Sair\n");
+    printf("Escolha: ");
+}
+
+// ----------Main = "maestro"----------
+// So mostra o menu e chama as funcoes. Nenhuma regra do jogo fica aqui.
+int main() {
+    int opcao = 0;
+    srand(time(NULL));   // semente do sorteio (cobras mudam a cada jogo)
+
+    while (opcao != 3) {
+        exibirMenu();
+        if (scanf("%d", &opcao) != 1) {   // digitou letra em vez de numero
+            limparBuffer();
+            opcao = 0;
+        }
+
+        switch (opcao) {
+            case 1: jogarPartida();  break;
+            case 2: mostrarRanking(); break;
+            case 3: printf("Ate a proxima!\n"); break;
+            default: printf("Opcao invalida!\n");
+        }
+    }
+    return 0;
 }
